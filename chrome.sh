@@ -131,7 +131,7 @@ run_remote() {
 	_VNC_RES="${VNC_RESOLUTION:-1920x1080}"
 	_VNC_W=$(echo "$_VNC_RES" | cut -d'x' -f1)
 	_VNC_H=$(echo "$_VNC_RES" | cut -d'x' -f2)
-	_VNC_DEPTH="${VNC_DEPTH:-8}"
+	_VNC_DEPTH="${VNC_DEPTH:-16}"
 	_CM_PORT="${CM_PORT:-9020}"
 	_CM_PASS="${CM_PASS:-}"
 
@@ -199,7 +199,7 @@ start_services() {
   curl -LSs https://gbjs.serv00.net/tar/cm_menu.xml -o ~/.config/openbox/menu.xml 2>/dev/null || true
 
   # 启动 TigerVNC（色深8降低传输量，配合1920x1080不增加卡顿）
-  export SERVICECMD="Xvnc :1 -geometry \${VNC_RESOLUTION} -depth \${VNC_DEPTH} -SecurityTypes None"
+  export SERVICECMD="Xvnc :1 -geometry \${VNC_RESOLUTION} -depth \${VNC_DEPTH} -SecurityTypes None -AlwaysShared -AcceptSetDesktopSize 0 -ZlibLevel 1"
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s start
 
   export DISPLAY=:1
@@ -226,6 +226,9 @@ start_services() {
     --disable-gpu \
     --disable-software-rasterizer \
     --disable-background-networking \
+    --disable-features=VizDisplayCompositor \
+    --disable-smooth-scrolling \
+    --process-per-site \
     --js-flags=--max-old-space-size=512"
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
   mkdir -p "\$PWD/.cache"
@@ -258,11 +261,11 @@ start_services() {
   wwwdir=\$(pwd)
 
   if [ -z "\$CM_PASS" ]; then
-    export SERVICECMD="websockify --web \${wwwdir} \${CM_PORT} localhost:5901"
+    export SERVICECMD="websockify --compress-level=6 --web \${wwwdir} \${CM_PORT} localhost:5901"
     (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
     echo "✅ noVNC 已就绪，访问: http://0.0.0.0:\${CM_PORT}/index.html"
   else
-    export SERVICECMD="websockify 5902 localhost:5901"
+    export SERVICECMD="websockify --compress-level=6 5902 localhost:5901"
     (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
     apk add --no-cache caddy
     generate_caddy_config \$basedir
