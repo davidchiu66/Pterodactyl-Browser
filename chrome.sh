@@ -183,8 +183,9 @@ enable_autoconnect() {
 # 写入 Chromium 默认缩放配置（67%），在 Chromium 启动前执行
 # ln(0.67) ≈ -0.4054651081081645，Chromium 用对数值存储缩放
 # 同时写入 --no-first-run 标记，防止首次启动向导覆盖 Preferences
+# 注意：proot 环境中 HOME=/config，所以路径写死为 /config/.config/chromium
 setup_chromium_zoom() {
-  local profile_dir="\${HOME}/.config/chromium/Default"
+  local profile_dir="/config/.config/chromium/Default"
   local prefs_file="\${profile_dir}/Preferences"
   mkdir -p "\${profile_dir}"
   # 仅在 Preferences 不存在、或不含 default_zoom_level 时写入
@@ -208,7 +209,7 @@ PREFS
     echo "✅ Chromium 缩放配置已存在，跳过写入"
   fi
   # 写入 First Run 标记文件，阻止 Chromium 首次启动向导覆盖 Preferences
-  touch "\${HOME}/.config/chromium/First Run" 2>/dev/null || true
+  touch "/config/.config/chromium/First Run" 2>/dev/null || true
 }
 
 start_services() {
