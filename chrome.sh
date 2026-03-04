@@ -1,6 +1,5 @@
 #!/bin/bash
-# 部署 Chrome（KasmVNC + Gost SOCKS5 代理中转）
-# 设计：chrome 后台启动后立即返回，不阻塞后续进程（如 nanolimbo）
+# 部署 Chrome（TigerVNC + Gost SOCKS5 代理中转）
 
 # ============================================================
 # 环境变量加载
@@ -128,7 +127,7 @@ run_remote() {
 	runcftunnel "$1"
 	cd "${PROOT_DIR}"
 
-	# 解析分辨率（兼容 sh，避免 Bad substitution）
+	# 解析分辨率（用 cut 兼容 busybox sh，避免 Bad substitution）
 	_VNC_RES="${VNC_RESOLUTION:-1280x720}"
 	_VNC_W=$(echo "$_VNC_RES" | cut -d'x' -f1)
 	_VNC_H=$(echo "$_VNC_RES" | cut -d'x' -f2)
@@ -136,7 +135,7 @@ run_remote() {
 	_CM_PORT="${CM_PORT:-9020}"
 	_CM_PASS="${CM_PASS:-}"
 
-	# 写入内嵌 runchrome 脚本到 proot 的 /root/
+	# 写入内嵌脚本到 proot /root/
 	INNER_SCRIPT_PATH="${PROOT_DIR}/rootfs/root/runchrome_runit.sh"
 
 	cat > "$INNER_SCRIPT_PATH" << INNEREOF
@@ -167,67 +166,49 @@ generate_caddy_config() {
   root * \$1/novnc
   file_server
   handle_path /websockify* {
-    reverse_proxy localhost:6902
+    reverse_proxy localhost:5902
   }
 }
 EOF
   echo "✅ Caddyfile 已生成，端口 \$CM_PORT，用户名 chromium"
 }
 
+enable_autoconnect() {
+  local file="\${1:-index.html}"
+  if command -v perl >/dev/null 2>&1; then
+    perl -i -pe 's/.*defaults\["autoconnect"\].*//g; \$_ = "defaults[\"autoconnect\"] = true;\n" if \$. == 85;' "\$file" 2>/dev/null || true
+  fi
+}
+
 start_services() {
-  echo "🚀 启动 Chromium + KasmVNC + Openbox..."
+  echo "🚀 启动 Chromium + TigerVNC + Openbox..."
 
   if ! command -v chromium-browser >/dev/null 2>&1; then
     apk update
     apk add --no-cache chromium git bash curl wget \
       font-noto-emoji font-noto-cjk ttf-dejavu \
       mesa mesa-gl mesa-egl libx11 libxext libxrender \
-      openbox xdotool xdpyinfo pciutils-dev st
+      tigervnc openbox xdotool xdpyinfo pciutils-dev st \
+      websockify
     fc-cache -fv
   else
     echo "✅ 软件包已存在，跳过安装"
   fi
 
-  # 安装 KasmVNC（Alpine 社区包）
-  if ! command -v kasmvncserver >/dev/null 2>&1; then
-    echo "📦 安装 KasmVNC..."
-    apk add --no-cache kasmvnc
-  else
-    echo "✅ KasmVNC 已存在，跳过安装"
-  fi
-
   [ -d ~/.config/openbox ] || mkdir -p ~/.config/openbox
   curl -LSs https://gbjs.serv00.net/tar/cm_menu.xml -o ~/.config/openbox/menu.xml 2>/dev/null || true
 
-  # KasmVNC 配置目录
-  mkdir -p ~/.vnc
-  # 写入 KasmVNC 配置（无密码，内网访问）
-  cat > ~/.vnc/kasmvnc.yaml << EOF
-network:
-  websocket_port: 6901
-  use_ssl: false
-  udp:
-    enable_webrtc: false
-desktop:
-  resolution:
-    width: \${VNC_W}
-    height: \${VNC_H}
-  allow_resize: false
-  pixel_depth: \${VNC_DEPTH}
-EOF
-
-  # 启动 KasmVNC
-  export DISPLAY=:1
-  export SERVICECMD="kasmvncserver :1 -geometry \${VNC_RESOLUTION} -depth \${VNC_DEPTH} -SecurityTypes None -websocketPort 6901 -noxstartup"
+  # 启动 TigerVNC（降低分辨率和色深提升流畅度）
+  export SERVICECMD="Xvnc :1 -geometry \${VNC_RESOLUTION} -depth \${VNC_DEPTH} -SecurityTypes None"
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s start
 
-  # 等待 KasmVNC 就绪
+  export DISPLAY=:1
   for i in \$(seq 1 15); do
     if xdpyinfo -display :1 > /dev/null 2>&1; then
-      echo "✅ KasmVNC 已就绪，启动 Openbox..."
+      echo "✅ Xvnc 已就绪，启动 Openbox..."
       break
     fi
-    echo "⏳ 等待 KasmVNC 初始化... (\${i}/15)"
+    echo "⏳ 等待 Xvnc 初始化... (\${i}/15)"
     sleep 1
   done
 
@@ -236,7 +217,7 @@ EOF
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
   sed -i "1a export DISPLAY=:1" /etc/service/openbox/run
 
-  # 启动 Chromium（无GPU容器优化参数）
+  # 启动 Chromium（无 GPU 容器优化参数）
   export SERVICECMD="chromium-browser \
     --no-sandbox \
     --start-maximized \
@@ -254,7 +235,7 @@ EOF
 
   basedir=\$(pwd)
 
-  # noVNC（已存在则跳过）
+  # 下载 noVNC（已存在则跳过）
   if [ ! -d "./novnc" ]; then
     echo "📦 下载 noVNC..."
     if timeout 10s git clone --depth=1 https://github.com/novnc/noVNC.git ./novnc 2>/dev/null; then
@@ -273,20 +254,16 @@ EOF
   cd novnc || { echo "❌ 无法进入 novnc 目录"; exit 1; }
   if [ -f "vnc.html" ] && [ ! -f "index.html" ]; then
     mv vnc.html index.html
-    # 启用自动连接
-    if command -v perl >/dev/null 2>&1; then
-      perl -i -pe 's/.*defaults\["autoconnect"\].*//g; \$_ = "defaults[\"autoconnect\"] = true;\n" if \$. == 85;' index.html 2>/dev/null || true
-    fi
+    enable_autoconnect index.html
   fi
   wwwdir=\$(pwd)
 
   if [ -z "\$CM_PASS" ]; then
-    # KasmVNC 内置 WebSocket 在 6901，直接反代
-    export SERVICECMD="websockify --web \${wwwdir} \${CM_PORT} localhost:6901"
+    export SERVICECMD="websockify --web \${wwwdir} \${CM_PORT} localhost:5901"
     (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
     echo "✅ noVNC 已就绪，访问: http://0.0.0.0:\${CM_PORT}/index.html"
   else
-    export SERVICECMD="websockify 6902 localhost:6901"
+    export SERVICECMD="websockify 5902 localhost:5901"
     (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
     apk add --no-cache caddy
     generate_caddy_config \$basedir
@@ -321,7 +298,7 @@ INNEREOF
 	[ -e /tmp/cm_pipe ] && rm -f /tmp/cm_pipe
 	mkfifo /tmp/cm_pipe
 
-	# 后台启动 proot，输出写入 pipe 和日志
+	# 后台启动 proot，完成后输出 __CHROME_DONE__ 信号
 	PROOT_STARTED=1 nohup ./proot -S ./rootfs -b /proc -b /sys -w "$PROOT_DIR" --cwd=/root \
 		-b /etc/resolv.conf:/etc/resolv.conf \
 		-b "$PROOT_TMP_DIR/hosts":/etc/hosts /bin/sh -c "
@@ -337,19 +314,12 @@ INNEREOF
 		echo '__CHROME_DONE__'
 		" > /tmp/cm_pipe 2>&1 &
 
-	PROOT_PID=$!
-
-	# 读取输出直到收到完成信号或超时（最多等 120 秒）
+	# 读取输出直到收到完成信号，然后立即返回让 nanolimbo 继续
 	echo "🔧 [Chrome] 正在初始化，等待服务就绪..."
-	TIMEOUT=120
-	ELAPSED=0
 	while IFS= read -r line; do
 		echo "$line"
 		echo "$line" >> /home/container/.tmp/alpine/cm.log 2>/dev/null || true
-		if [ "$line" = "__CHROME_DONE__" ]; then
-			break
-		fi
-		ELAPSED=$((ELAPSED + 0))
+		[ "$line" = "__CHROME_DONE__" ] && break
 	done < /tmp/cm_pipe
 
 	rm -f /tmp/cm_pipe
@@ -360,7 +330,7 @@ INNEREOF
 			local GOST_PORT="${PROXY_LOCAL_PORT:-1080}"
 			echo "🛡  SOCKS5 代理: 127.0.0.1:${GOST_PORT}（无需密码）"
 		fi
-		echo "🌐 noVNC 访问端口: ${CM_PORT:-9020}"
+		echo "🌐 noVNC 访问端口: ${_CM_PORT}"
 	fi
 }
 
