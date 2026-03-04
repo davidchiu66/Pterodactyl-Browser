@@ -127,15 +127,13 @@ run_remote() {
 	runcftunnel "$1"
 	cd "${PROOT_DIR}"
 
-	# 解析分辨率（用 cut 兼容 busybox sh，避免 Bad substitution）
-	_VNC_RES="${VNC_RESOLUTION:-1920x1080}"
+	_VNC_RES="${VNC_RESOLUTION:-1280x720}"
 	_VNC_W=$(echo "$_VNC_RES" | cut -d'x' -f1)
 	_VNC_H=$(echo "$_VNC_RES" | cut -d'x' -f2)
 	_VNC_DEPTH="${VNC_DEPTH:-16}"
 	_CM_PORT="${CM_PORT:-9020}"
 	_CM_PASS="${CM_PASS:-}"
 
-	# 写入内嵌脚本到 proot /root/
 	INNER_SCRIPT_PATH="${PROOT_DIR}/rootfs/root/runchrome_runit.sh"
 
 	cat > "$INNER_SCRIPT_PATH" << INNEREOF
@@ -165,8 +163,25 @@ generate_caddy_config() {
   }
   root * \$1/novnc
   file_server
+  @websocket {
+    path /websockify*
+    header Connection *Upgrade*
+    header Upgrade websocket
+  }
+  handle @websocket {
+    reverse_proxy localhost:5902 {
+      header_up Host {host}
+      header_up X-Real-IP {remote}
+      header_up X-Forwarded-For {remote}
+      header_up Connection "Upgrade"
+      header_up Upgrade "websocket"
+      flush_interval -1
+    }
+  }
   handle_path /websockify* {
-    reverse_proxy localhost:5902
+    reverse_proxy localhost:5902 {
+      flush_interval -1
+    }
   }
 }
 EOF
@@ -198,7 +213,6 @@ start_services() {
   [ -d ~/.config/openbox ] || mkdir -p ~/.config/openbox
   curl -LSs https://gbjs.serv00.net/tar/cm_menu.xml -o ~/.config/openbox/menu.xml 2>/dev/null || true
 
-  # 启动 TigerVNC（降低分辨率和色深提升流畅度）
   export SERVICECMD="Xvnc :1 -geometry \${VNC_RESOLUTION} -depth \${VNC_DEPTH} -SecurityTypes None"
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s start
 
@@ -212,12 +226,10 @@ start_services() {
     sleep 1
   done
 
-  # 启动 Openbox
   export SERVICECMD="openbox"
   (curl -LsSk https://gbjs.serv00.net/sh/runit.sh) | sh -s add
   sed -i "1a export DISPLAY=:1" /etc/service/openbox/run
 
-  # 启动 Chromium（无 GPU 容器优化参数）
   export SERVICECMD="chromium-browser \
     --no-sandbox \
     --start-maximized \
@@ -234,7 +246,6 @@ start_services() {
 
   basedir=\$(pwd)
 
-  # 下载 noVNC（已存在则跳过）
   if [ ! -d "./novnc" ]; then
     echo "📦 下载 noVNC..."
     if timeout 10s git clone --depth=1 https://github.com/novnc/noVNC.git ./novnc 2>/dev/null; then
@@ -297,7 +308,6 @@ INNEREOF
 	[ -e /tmp/cm_pipe ] && rm -f /tmp/cm_pipe
 	mkfifo /tmp/cm_pipe
 
-	# 后台启动 proot，完成后输出 __CHROME_DONE__ 信号
 	PROOT_STARTED=1 nohup ./proot -S ./rootfs -b /proc -b /sys -w "$PROOT_DIR" --cwd=/root \
 		-b /etc/resolv.conf:/etc/resolv.conf \
 		-b "$PROOT_TMP_DIR/hosts":/etc/hosts /bin/sh -c "
@@ -313,7 +323,6 @@ INNEREOF
 		echo '__CHROME_DONE__'
 		" > /tmp/cm_pipe 2>&1 &
 
-	# 读取输出直到收到完成信号，然后立即返回让 nanolimbo 继续
 	echo "🔧 [Chrome] 正在初始化，等待服务就绪..."
 	while IFS= read -r line; do
 		echo "$line"
