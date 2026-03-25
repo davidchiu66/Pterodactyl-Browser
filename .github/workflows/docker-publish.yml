@@ -23,11 +23,16 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
+          
+      - name: Set date-based tag
+        run: echo "DATE_TAG=$(date +'%y.%-m.%-d')" >> $GITHUB_ENV
+        
       - name: Build and push
         uses: docker/build-push-action@v4
         with:
           context: .
           push: true
           # 这里已手动修正为全小写
-          tags: ghcr.io/davidchiu66/pterodactyl-mini-firefox:latest
+          tags: 
+            ghcr.io/${{ github.repository }}:${{ env.DATE_TAG }}
+            ghcr.io/${{ github.repository }}:latest
